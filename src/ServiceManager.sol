@@ -17,6 +17,7 @@ contract ServiceManager is IPredicateManager, OwnableUpgradeable {
     error ServiceManager__InvalidOperator();
     error ServiceManager__InvalidStrategy();
     error ServiceManager__ArrayLengthMismatch();
+    error ServiceManager__Reentrancy();
 
     enum OperatorStatus {
         NEVER_REGISTERED, // default is NEVER_REGISTERED
@@ -45,6 +46,8 @@ contract ServiceManager is IPredicateManager, OwnableUpgradeable {
     address public stakeRegistry;
     address public avsDirectory;
     uint256 public thresholdStake;
+
+    uint256 private _lock = 1; // 0 = locked, 1 = unlocked
 
     mapping(string => uint256) policyIdToThreshold;
     mapping(address => bool) private permissionedOperators;
@@ -75,6 +78,13 @@ contract ServiceManager is IPredicateManager, OwnableUpgradeable {
         uint256 expireByBlockNumber,
         address[] signerAddresses
     );
+
+    modifier lock() {
+        if (_lock != 1) revert ServiceManager__Reentrancy();
+        _lock = 0;
+        _;
+        _lock = 1;
+    }
 
     modifier onlyAggregator() {
         if (msg.sender != aggregator) {
@@ -233,7 +243,7 @@ contract ServiceManager is IPredicateManager, OwnableUpgradeable {
     function registerOperatorToAVS(
         address _operatorSigningKey,
         SignatureWithSaltAndExpiry memory _operatorSignature
-    ) external onlyPermissionedOperator {
+    ) external onlyPermissionedOperator lock {
         require(
             signingKeyToOperator[_operatorSigningKey] == address(0),
             "ServiceManager.registerOperatorToAVS: operator already registered"
@@ -266,7 +276,7 @@ contract ServiceManager is IPredicateManager, OwnableUpgradeable {
      */
     function deregisterOperatorFromAVS(
         address _operator
-    ) external onlyOwner {
+    ) external onlyOwner lock {
         require(
             operators[_operator].status != OperatorStatus.NEVER_REGISTERED,
             "ServiceManager.deregisterOperatorFromAVS: operator is not registered"
@@ -404,7 +414,7 @@ contract ServiceManager is IPredicateManager, OwnableUpgradeable {
      * @param quorumNumber uint8 denoting the quorum number
      * @param index uint256 denoting the index for the strategy
      */
-    function addStrategy(address _strategy, uint8 quorumNumber, uint256 index) external onlyOwner {
+    function addStrategy(address _strategy, uint8 quorumNumber, uint256 index) external onlyOwner lock {
         IStakeRegistry.StrategyParams memory strategyParams =
             IStakeRegistry(stakeRegistry).strategyParamsByIndex(quorumNumber, index);
         if (address(strategyParams.strategy) != _strategy) {
@@ -420,7 +430,7 @@ contract ServiceManager is IPredicateManager, OwnableUpgradeable {
      */
     function removeStrategy(
         address _strategy
-    ) external onlyOwner {
+    ) external onlyOwner lock {
         for (uint256 i = 0; i != strategies.length;) {
             if (strategies[i] == _strategy) {
                 strategies[i] = strategies[strategies.length - 1];
@@ -475,7 +485,7 @@ contract ServiceManager is IPredicateManager, OwnableUpgradeable {
      * sanitization checks on the input array lengths, quorumNumbers existing, and that quorumNumbers are ordered. Function must
      * also not be paused by the PAUSED_UPDATE_OPERATOR flag.
      */
-    function updateOperatorsForQuorum(address[][] calldata operatorsPerQuorum, bytes calldata quorumNumbers) external {
+    function updateOperatorsForQuorum(address[][] calldata operatorsPerQuorum, bytes calldata quorumNumbers) external lock {
         if (operatorsPerQuorum.length != quorumNumbers.length) {
             revert ServiceManager__ArrayLengthMismatch();
         }
